@@ -121,7 +121,6 @@ jobs:
         args: 
         - -c
         - |
-          set -e
           echo $SERVICE_ACCOUNT > credential.json
           gcloud auth activate-service-account --key-file=credential.json
           gcloud config set project ((project_name))
@@ -130,7 +129,7 @@ jobs:
           gcloud container clusters get-credentials $CLUSTER_NAME --zone=$CLUSTER_ZONE
 
           echo "=============CREATE CLUSTER ROLE BINDING==============="
-          kubectl get clusterrolebinding cluster-admin-binding | grep cluster-admin-binding
+          kubectl get clusterrolebinding | grep cluster-admin-binding
           if [ $? = 0 ]; then
             kubectl delete clusterrolebinding cluster-admin-binding
           fi
