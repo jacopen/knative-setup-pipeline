@@ -41,13 +41,12 @@ jobs:
         args: 
         - -c
         - |
-          set -e
           echo $SERVICE_ACCOUNT > credential.json
           gcloud auth activate-service-account --key-file=credential.json
           gcloud config set project ((project_name))
 
           echo "=============CREATE CLUSTER==============="
-          gcloud container clusters list | grep "^knative "
+          gcloud container clusters list | grep "^((cluster_name)) "
           if [ $? = 1 ]; then
           echo "Create a new cluster"
           gcloud container clusters create $CLUSTER_NAME \
