@@ -1,0 +1,332 @@
+resources:
+- name: knative-setup-pipeline
+  type: git
+  source:
+    uri: git@github.com:jacopen/knative-setup-pipeline.git
+    private_key: ((github_private_key))
+
+groups:
+  - name: knative
+    jobs:
+      - create-gke-cluster
+      - add-preemptible-pool
+      - delete-gke-cluster
+      - setup-knative
+      - config-knative
+      - disable-s2z
+  - name: general
+    jobs:
+      - create-general-gke-cluster
+      - delete-general-gke-cluster
+
+jobs:
+- name: create-gke-cluster
+  plan:
+  - get: knative-setup-pipeline
+  - task: create
+    params:
+      SERVICE_ACCOUNT: ((service_account))
+      CLUSTER_NAME: ((cluster_name))
+      CLUSTER_ZONE: ((cluster_zone))
+
+    config:
+      platform: linux
+      image_resource:
+        type: docker-image
+        source:
+          repository: google/cloud-sdk
+          tag: latest
+      run:
+        path: bash
+        args: 
+        - -c
+        - |
+          set -e
+          echo $SERVICE_ACCOUNT > credential.json
+          gcloud auth activate-service-account --key-file=credential.json
+          gcloud config set project ((project_name))
+
+          echo "=============CREATE CLUSTER==============="
+          gcloud container clusters list | grep "^knative "
+          if [ $? = 1 ]; then
+          echo "Create a new cluster"
+          gcloud container clusters create $CLUSTER_NAME \
+            --zone=$CLUSTER_ZONE \
+            --cluster-version=latest \
+            --machine-type=n1-standard-4 \
+            --scopes=service-control,service-management,compute-rw,storage-ro,cloud-platform,logging-write,monitoring-write,pubsub,datastore \
+            --num-nodes=3
+          else
+          echo "Detected existing cluster. Skippig.."
+          fi
+
+- name: add-preemptible-pool
+  plan:
+  - aggregate:
+    - get: knative-setup-pipeline
+  - task: create
+    params:
+      SERVICE_ACCOUNT: ((service_account))
+      CLUSTER_NAME: ((cluster_name))
+      CLUSTER_ZONE: ((cluster_zone))
+
+    config:
+      platform: linux
+      image_resource:
+        type: docker-image
+        source:
+          repository: google/cloud-sdk
+          tag: latest
+      run:
+        path: bash
+        args: 
+        - -c
+        - |
+          set -e
+          echo $SERVICE_ACCOUNT > credential.json
+          gcloud auth activate-service-account --key-file=credential.json
+          gcloud config set project ((project_name))
+
+          echo "=============CREATE PREEMPTIBLE NODE-POOL==============="
+          gcloud beta container node-pools create preemptible-pool \
+            --cluster $CLUSTER_NAME \
+            --zone $CLUSTER_ZONE \
+            --machine-type=n1-standard-2 \
+            --num-nodes=3 \
+            --preemptible
+          echo "=============DONE==============="
+
+- name: setup-knative
+  plan:
+  - aggregate:
+    - get: knative-setup-pipeline
+      passed:
+      - create-gke-cluster
+      trigger: true
+
+  - task: setup
+    params:
+      SERVICE_ACCOUNT: ((service_account))
+      CLUSTER_NAME: ((cluster_name))
+      CLUSTER_ZONE: ((cluster_zone))
+
+    config:
+      platform: linux
+      image_resource:
+        type: docker-image
+        source:
+          repository: jacopen/docker-gcp-tools
+          tag: latest
+      run:
+        path: bash
+        args: 
+        - -c
+        - |
+          set -e
+          echo $SERVICE_ACCOUNT > credential.json
+          gcloud auth activate-service-account --key-file=credential.json
+          gcloud config set project ((project_name))
+
+          echo "=============GET CREDENTIAL==============="
+          gcloud container clusters get-credentials $CLUSTER_NAME --zone=$CLUSTER_ZONE
+
+          echo "=============CREATE CLUSTER ROLE BINDING==============="
+          kubectl get clusterrolebinding cluster-admin-binding | grep cluster-admin-binding
+          if [ $? = 0 ]; then
+            kubectl delete clusterrolebinding cluster-admin-binding
+          fi
+          kubectl create clusterrolebinding cluster-admin-binding \
+          --clusterrole=cluster-admin \
+          --user=$(gcloud config get-value core/account)
+
+          echo "=============SETUP Knative=============="
+          riff system install --force
+
+          echo "=============DONE!==============="
+
+- name: config-knative
+  plan:
+  - aggregate:
+    - get: knative-setup-pipeline
+      passed:
+      - setup-knative
+      trigger: true
+
+  - task: setup
+    params:
+      SERVICE_ACCOUNT: ((service_account))
+      CLUSTER_NAME: ((cluster_name))
+      CLUSTER_ZONE: ((cluster_zone))
+
+    config:
+      platform: linux
+      image_resource:
+        type: docker-image
+        source:
+          repository: jacopen/docker-gcp-tools
+          tag: latest
+      inputs:
+        - name: knative-setup-pipeline
+      run:
+        path: bash
+        args: 
+        - -c
+        - |
+          set -e
+          echo $SERVICE_ACCOUNT > credential.json
+          gcloud auth activate-service-account --key-file=credential.json
+          gcloud config set project ((project_name))
+
+          echo "=============GET CREDENTIAL==============="
+          gcloud container clusters get-credentials $CLUSTER_NAME --zone=$CLUSTER_ZONE
+
+          echo "=============CREATE CLUSTER ROLE BINDING==============="
+          kubectl apply -f knative-setup-pipeline/gke/configs/config-domain.yml
+
+          echo "=============DONE!==============="
+
+- name: disable-s2z
+  plan:
+  - aggregate:
+    - get: knative-setup-pipeline
+      passed:
+      - setup-knative
+
+  - task: disable
+    params:
+      SERVICE_ACCOUNT: ((service_account))
+      CLUSTER_NAME: ((cluster_name))
+      CLUSTER_ZONE: ((cluster_zone))
+
+    config:
+      platform: linux
+      image_resource:
+        type: docker-image
+        source:
+          repository: jacopen/docker-gcp-tools
+          tag: latest
+      inputs:
+        - name: knative-setup-pipeline
+      run:
+        path: bash
+        args: 
+        - -c
+        - |
+          set -e
+          echo $SERVICE_ACCOUNT > credential.json
+          gcloud auth activate-service-account --key-file=credential.json
+          gcloud config set project ((project_name))
+
+          echo "=============GET CREDENTIAL==============="
+          gcloud container clusters get-credentials $CLUSTER_NAME --zone=$CLUSTER_ZONE
+
+          echo "=============APPLY SERVING CONFIG==============="
+          kubectl apply -f knative-setup-pipeline/gke/config-autoscaler.yaml
+
+          echo "=============DONE!==============="
+
+- name: delete-gke-cluster
+  plan:
+  - task: delete
+    params:
+      SERVICE_ACCOUNT: ((service_account))
+      CLUSTER_NAME: ((cluster_name))
+      CLUSTER_ZONE: ((cluster_zone))
+
+    config:
+      platform: linux
+      image_resource:
+        type: docker-image
+        source:
+          repository: google/cloud-sdk
+          tag: latest
+      run:
+        path: bash
+        args: 
+        - -c
+        - |
+          set -e
+          echo $SERVICE_ACCOUNT > credential.json
+          gcloud auth activate-service-account --key-file=credential.json
+          gcloud config set project ((project_name))
+          echo "=============CURRENT CLUSTERS==============="
+          gcloud container clusters list
+          echo "=============CREATE CLUSTER==============="
+          gcloud container clusters delete $CLUSTER_NAME \
+            --zone=$CLUSTER_ZONE \
+            --quiet
+          echo "=============RESULT==============="
+          gcloud container clusters list
+
+
+
+- name: create-general-gke-cluster
+  plan:
+  - get: knative-setup-pipeline
+  - task: create
+    params:
+      SERVICE_ACCOUNT: ((service_account))
+      CLUSTER_NAME: ((cluster_name_general))
+      CLUSTER_ZONE: ((cluster_zone))
+
+    config:
+      platform: linux
+      image_resource:
+        type: docker-image
+        source:
+          repository: google/cloud-sdk
+          tag: latest
+      run:
+        path: bash
+        args: 
+        - -c
+        - |
+          set -e
+          echo $SERVICE_ACCOUNT > credential.json
+          gcloud auth activate-service-account --key-file=credential.json
+          gcloud config set project ((project_name))
+
+          echo "=============CURRENT CLUSTERS==============="
+          gcloud container clusters list
+
+          echo "=============CREATE CLUSTER==============="
+          gcloud container clusters create $CLUSTER_NAME \
+            --zone=$CLUSTER_ZONE \
+            --cluster-version=latest \
+            --machine-type=n1-standard-2 \
+            --scopes=service-control,service-management,compute-rw,storage-ro,cloud-platform,logging-write,monitoring-write,pubsub,datastore \
+            --num-nodes=3
+
+- name: delete-general-gke-cluster
+  plan:
+  - task: delete
+    params:
+      SERVICE_ACCOUNT: ((service_account))
+      CLUSTER_NAME: ((cluster_name_general))
+      CLUSTER_ZONE: ((cluster_zone))
+
+    config:
+      platform: linux
+      image_resource:
+        type: docker-image
+        source:
+          repository: google/cloud-sdk
+          tag: latest
+      run:
+        path: bash
+        args: 
+        - -c
+        - |
+          set -e
+          echo $SERVICE_ACCOUNT > credential.json
+          gcloud auth activate-service-account --key-file=credential.json
+          gcloud config set project ((project_name))
+          echo "=============CURRENT CLUSTERS==============="
+          gcloud container clusters list
+          echo "=============CREATE CLUSTER==============="
+          gcloud container clusters delete $CLUSTER_NAME \
+            --zone=$CLUSTER_ZONE \
+            --quiet
+          echo "=============RESULT==============="
+          gcloud container clusters list
+

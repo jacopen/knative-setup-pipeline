@@ -1,0 +1,17 @@
+apiVersion: v1
+data:
+  concurrency-quantum-of-time: 100ms
+  enable-scale-to-zero: "false"
+  enable-vertical-pod-autoscaling: "false"
+  max-scale-up-rate: "10"
+  multi-concurrency-target: "1.0"
+  panic-window: 6s
+  scale-to-zero-threshold: 1m
+  single-concurrency-target: "0.9"
+  stable-window: 60s
+  tick-interval: 2s
+  vpa-multi-concurrency-target: "10.0"
+kind: ConfigMap
+metadata:
+  name: config-autoscaler
+  namespace: knative-serving

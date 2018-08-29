@@ -1,0 +1,10 @@
+service_account: |
+  REPLACE-HERE
+cluster_name: knative
+cluster_zone: asia-east1-a
+project_name: your-project-name
+cluster_name_general: gke-1
+github_private_key: |
+  -----BEGIN RSA PRIVATE KEY-----
+  dummy
+  -----END RSA PRIVATE KEY-----

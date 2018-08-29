@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: config-domain
+  namespace: knative-serving
+data:
+  knative-prod.udcp.info: |
+    selector:
+      app: prod
+  knative.udcp.info: ""
